@@ -54,7 +54,11 @@ func TestGetServiceKey(t *testing.T) {
 
 // setupEtcd is a helper function to set up an etcd container for tests.
 func setupEtcd(ctx context.Context, t *testing.T) (*EtcdRegistry, testcontainers.Container, func()) {
-	etcdContainer, err := etcd.Run(ctx, "bitnami/etcd:3.5.20")
+	etcdContainer, err := etcd.Run(ctx, "bitnami/etcd:3.5.20", testcontainers.WithEnv(map[string]string{
+		"ALLOW_NONE_AUTHENTICATION": "yes",
+		"ETCD_ADVERTISE_CLIENT_URLS": "http://0.0.0.0:2379",
+		"ETCD_LISTEN_CLIENT_URLS":    "http://0.0.0.0:2379",
+	}))
 	if err != nil {
 		t.Fatalf("failed to start etcd container: %s", err)
 	}
@@ -371,7 +375,7 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 
 		_, err := NewEtcdRegistry(invalidEndpoints, WithLogger(logger), WithDialTimeout(1*time.Second))
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "failed to create etcd client")
+		assert.Contains(t, err.Error(), "failed to connect to etcd")
 	})
 }
 
