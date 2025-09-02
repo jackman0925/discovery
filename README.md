@@ -1,5 +1,9 @@
 # Etcd Service Discovery for Go
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/jackman0925/discovery)](https://goreportcard.com/report/github.com/jackman0925/discovery)
+[![Go Reference](https://pkg.go.dev/badge/github.com/jackman0925/discovery.svg)](https://pkg.go.dev/github.com/jackman0925/discovery)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+
 A robust and easy-to-use Go library for service registration and discovery using etcd v3.
 
 This library provides a clean, flexible, and resilient way to manage microservice lifecycle and discovery within an etcd cluster.
@@ -17,9 +21,8 @@ This library provides a clean, flexible, and resilient way to manage microservic
 ## Installation
 
 ```sh
-go get https://github.com/jackman0925/discovery
+go get github.com/jackman0925/discovery
 ```
-*(Please replace `https://github.com/jackman0925/discovery` with your actual repository path)*
 
 ## Usage
 
@@ -35,7 +38,7 @@ import (
 	"os"
 	"time"
 
-	"https://github.com/jackman0925/discovery"
+	"github.com/jackman0925/discovery"
 )
 
 func main() {
@@ -81,6 +84,23 @@ func main() {
 		fmt.Println("Shutting down after 60 seconds...")
 	}
 }
+```
+
+## Testing
+
+The library has a comprehensive test suite that includes both unit and integration tests.
+
+- **Unit Tests**: These tests do not have any external dependencies and can be run easily.
+- **Integration Tests**: These tests require a running Docker environment to spin up an etcd container.
+
+To run all tests:
+```sh
+go test -v ./...
+```
+
+To run only the unit tests (which is faster and doesn't require Docker):
+```sh
+go test -v -short ./...
 ```
 
 ## Configuration Options
