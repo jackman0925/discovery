@@ -27,6 +27,13 @@ go.work.sum
 # env file
 .env
 
+
+# mac os
+.DS_Store
+**/.DS_Store
+.DS_Store?
+
+
 # Editor/IDE
 # .idea/
 # .vscode/
