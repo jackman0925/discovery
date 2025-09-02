@@ -98,6 +98,7 @@ type EtcdRegistry struct {
 	wg          sync.WaitGroup
 	opts        Options
 	logger      Logger
+	closeOnce   sync.Once
 }
 
 // NewEtcdRegistry creates a new EtcdRegistry instance.
@@ -133,6 +134,16 @@ func NewEtcdRegistry(endpoints []string, opts ...Option) (*EtcdRegistry, error) 
 		errMsg := fmt.Sprintf("failed to create etcd client: %v, endpoints: %v", err, endpoints)
 		options.Logger.Printf("[ERROR] %s", errMsg)
 		return nil, fmt.Errorf("failed to create etcd client: %w", err)
+	}
+
+	// Verify the connection.
+	ctx, cancel := context.WithTimeout(context.Background(), options.DialTimeout)
+	defer cancel()
+	if _, err = client.Status(ctx, endpoints[0]); err != nil {
+		client.Close()
+		errMsg := fmt.Sprintf("failed to connect to etcd: %v, endpoints: %v", err, endpoints)
+		options.Logger.Printf("[ERROR] %s", errMsg)
+		return nil, fmt.Errorf(errMsg)
 	}
 	options.Logger.Printf("[INFO] Successfully connected to etcd server.")
 
@@ -257,24 +268,25 @@ func (e *EtcdRegistry) reRegister() {
 
 // Deregister unregisters the service from etcd.
 func (e *EtcdRegistry) Deregister() error {
-	if e.leaseID == 0 || e.serviceInfo == nil {
-		return nil
-	}
-
-	close(e.stopSignal)
-	e.wg.Wait()
-
-	e.logger.Printf("[INFO] Revoking lease (ID: %d) for service [%s]", e.leaseID, e.serviceInfo.Name)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	_, err := e.client.Revoke(ctx, e.leaseID)
-	if err != nil {
-		e.logger.Printf("[ERROR] Failed to revoke lease: %v", err)
-		return fmt.Errorf("failed to revoke lease: %w", err)
-	}
-
-	e.logger.Printf("[INFO] Service [%s] successfully deregistered from etcd", e.serviceInfo.Name)
-	return nil
+	var err error
+	e.closeOnce.Do(func() {
+		if e.leaseID == 0 || e.serviceInfo == nil {
+			return
+		}
+		close(e.stopSignal)
+		e.wg.Wait()
+		e.logger.Printf("[INFO] Revoking lease (ID: %d) for service [%s]", e.leaseID, e.serviceInfo.Name)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_, err = e.client.Revoke(ctx, e.leaseID)
+		if err != nil {
+			e.logger.Printf("[ERROR] Failed to revoke lease: %v", err)
+			err = fmt.Errorf("failed to revoke lease: %w", err)
+			return
+		}
+		e.logger.Printf("[INFO] Service [%s] successfully deregistered from etcd", e.serviceInfo.Name)
+	})
+	return err
 }
 
 // Close safely shuts down the registry.
