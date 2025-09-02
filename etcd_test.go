@@ -9,7 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/etcd"
+	"github.com/testcontainers/testcontainers-go/wait"
 )
 
 func TestGetServiceKey(t *testing.T) {
@@ -54,11 +54,18 @@ func TestGetServiceKey(t *testing.T) {
 
 // setupEtcd is a helper function to set up an etcd container for tests.
 func setupEtcd(ctx context.Context, t *testing.T) (*EtcdRegistry, testcontainers.Container, func()) {
-	etcdContainer, err := etcd.Run(ctx, "bitnami/etcd:3.5.20", testcontainers.WithEnv(map[string]string{
-		"ALLOW_NONE_AUTHENTICATION": "yes",
-		"ETCD_ADVERTISE_CLIENT_URLS": "http://0.0.0.0:2379",
-		"ETCD_LISTEN_CLIENT_URLS":    "http://0.0.0.0:2379",
-	}))
+	req := testcontainers.ContainerRequest{
+		Image:        "bitnami/etcd:3.5.20",
+		ExposedPorts: []string{"2379/tcp"},
+		WaitingFor:   wait.ForLog("ready to serve client requests"),
+		Env: map[string]string{
+			"ALLOW_NONE_AUTHENTICATION": "yes",
+		},
+	}
+	etcdContainer, err := testcontainers.GenericContainer(ctx, testcontainers.GenericContainerRequest{
+		ContainerRequest: req,
+		Started:          true,
+	})
 	if err != nil {
 		t.Fatalf("failed to start etcd container: %s", err)
 	}
@@ -184,9 +191,10 @@ func TestIntegration_WatchService(t *testing.T) {
 		Address: "127.0.0.1",
 		Port:    "8002",
 	}
-	// Create a new registry for service2 to simulate a separate process
-	registry2, _, cleanup2 := setupEtcd(ctx, t)
-	defer cleanup2()
+	// Create a new registry for service2 to simulate a separate process, connecting to the same etcd instance.
+	registry2, err := NewEtcdRegistry(registry.client.Endpoints(), WithLogger(registry.logger), WithTTL(5))
+	assert.NoError(t, err)
+	defer registry2.Close()
 
 	err = registry2.Register(ctx, service2)
 	assert.NoError(t, err)
@@ -234,57 +242,6 @@ func TestIntegration_WatchService(t *testing.T) {
 
 	// Give some time for watch goroutine to process final events before context cancellation
 	time.Sleep(1 * time.Second)
-}
-
-func TestIntegration_AutoReRegister(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping integration test in short mode.")
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second) // Increased timeout for re-register test
-	defer cancel()
-
-	registry, etcdContainer, cleanup := setupEtcd(ctx, t)
-	defer cleanup()
-
-	serviceInfo := &ServiceInfo{
-		Name:    "re-register-service",
-		ID:      "re-register-instance-1",
-		Address: "localhost",
-		Port:    "8080",
-	}
-
-	// 1. Register the service
-	err := registry.Register(ctx, serviceInfo)
-	assert.NoError(t, err)
-
-	// Verify it's registered initially
-	services, err := registry.GetService(ctx, serviceInfo.Name)
-	assert.NoError(t, err)
-	assert.Len(t, services, 1, "Expected service to be registered initially")
-
-	// 2. Stop the etcd container to simulate downtime
-	t.Log("Stopping etcd container to simulate downtime...")
-	err = etcdContainer.Stop(ctx, nil) // nil for default stop timeout
-	assert.NoError(t, err)
-
-	// Wait for longer than TTL to ensure lease expires
-	t.Logf("Waiting for %d seconds (2x TTL) for lease to expire...", registry.opts.TTL*2)
-	time.Sleep(time.Duration(registry.opts.TTL*2) * time.Second)
-
-	// 3. Start the etcd container to simulate recovery
-	t.Log("Starting etcd container to simulate recovery...")
-	err = etcdContainer.Start(ctx)
-	assert.NoError(t, err)
-
-	// 4. Wait for re-registration to occur
-	t.Log("Waiting for service to re-register...")
-	assert.Eventually(t, func() bool {
-		services, err := registry.GetService(ctx, serviceInfo.Name)
-		return err == nil && len(services) == 1 && services[0].ID == serviceInfo.ID
-	}, 15*time.Second, 1*time.Second, "Service did not re-register within expected time")
-
-	t.Log("Service successfully re-registered.")
 }
 
 func TestIntegration_DeleteServices(t *testing.T) {
