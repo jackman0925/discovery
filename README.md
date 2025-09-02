@@ -2,7 +2,7 @@
 
 [![Go Report Card](https://goreportcard.com/badge/github.com/jackman0925/discovery)](https://goreportcard.com/report/github.com/jackman0925/discovery)
 [![Go Reference](https://pkg.go.dev/badge/github.com/jackman0925/discovery.svg)](https://pkg.go.dev/github.com/jackman0925/discovery)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 A robust and easy-to-use Go library for service registration and discovery using etcd v3.
 
