@@ -17,9 +17,9 @@ This library provides a clean, flexible, and resilient way to manage microservic
 ## Installation
 
 ```sh
-go get github.com/your-username/discovery
+go get https://github.com/jackman0925/discovery
 ```
-*(Please replace `github.com/your-username/discovery` with your actual repository path)*
+*(Please replace `https://github.com/jackman0925/discovery` with your actual repository path)*
 
 ## Usage
 
@@ -35,7 +35,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/your-username/discovery"
+	"https://github.com/jackman0925/discovery"
 )
 
 func main() {
