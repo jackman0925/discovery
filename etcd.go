@@ -8,6 +8,7 @@ import (
 	"time"
 
 	clientv3 "go.etcd.io/etcd/client/v3"
+	"go.etcd.io/etcd/client/v3/concurrency"
 )
 
 // Logger defines the interface for logging. This allows users to use their own logger.
@@ -418,4 +419,41 @@ func (e *EtcdRegistry) DeleteServiceByPrefix(ctx context.Context, namePrefix str
 
 	e.logger.Printf("[INFO] Successfully deleted %d services (prefix: %s)", resp.Deleted, keyPrefix)
 	return resp.Deleted, nil
+}
+
+// NewElection creates a new Election instance for a leadership campaign.
+// The proposal is the value that this candidate is putting forward for the election.
+// Typically this would be the candidate's own ID or address.
+func (e *EtcdRegistry) NewElection(opts ElectionOptions) (*Election, error) {
+	if opts.ElectionName == "" {
+		return nil, fmt.Errorf("election name cannot be empty")
+	}
+	if opts.TTL == 0 {
+		opts.TTL = 15 // Default to 15 seconds
+	}
+	if opts.Proposal == "" {
+		// If the registry has a service registered, use its ID. Otherwise, use a random string.
+		if e.serviceInfo != nil && e.serviceInfo.ID != "" {
+			opts.Proposal = e.serviceInfo.ID
+		} else {
+			return nil, fmt.Errorf("proposal cannot be empty if no service is registered")
+		}
+	}
+
+	// The session is the basis for leadership election.
+	// If the session is lost, the leadership is lost.
+	session, err := concurrency.NewSession(e.client, concurrency.WithTTL(opts.TTL))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create concurrency session: %w", err)
+	}
+
+	electionPrefix := fmt.Sprintf("%s/%s/elections/%s", e.opts.KeyPrefix, e.opts.Namespace, opts.ElectionName)
+	election := concurrency.NewElection(session, electionPrefix)
+
+	return &Election{
+		registry: e,
+		session:  session,
+		election: election,
+		opts:     opts,
+	}, nil
 }
