@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	clientv3 "go.etcd.io/etcd/client/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -79,6 +80,30 @@ func setupEtcd(ctx context.Context, t *testing.T) (*EtcdRegistry, testcontainers
 	// Use the standard log library for test output for easier debugging.
 	logger := log.New(os.Stdout, "[ETCD-TEST] ", log.LstdFlags)
 
+	// ---- START NEW DIAGNOSTIC CODE ----
+	logger.Printf("Container started. Mapped endpoint: %s", endpoint)
+	logger.Printf("Attempting to establish initial connection for status check...")
+
+	// Create a temporary, minimal client just to check the connection status.
+	tempClient, err := clientv3.New(clientv3.Config{
+		Endpoints:   endpoints,
+		DialTimeout: 5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("failed to create temporary etcd client for status check: %s", err)
+	}
+	defer tempClient.Close()
+
+	// Perform a status check to ensure the server is responsive.
+	statusCtx, statusCancel := context.WithTimeout(ctx, 5*time.Second)
+	defer statusCancel()
+	_, err = tempClient.Status(statusCtx, endpoints[0])
+	if err != nil {
+		t.Fatalf("failed to get status from etcd endpoint %s: %s", endpoint, err)
+	}
+	logger.Printf("Status check successful. Endpoint is responsive.")
+	// ---- END NEW DIAGNOSTIC CODE ----
+
 	registry, err := NewEtcdRegistry(endpoints, WithLogger(logger), WithTTL(5)) // Use a short TTL for testing
 	if err != nil {
 		t.Fatalf("failed to create etcd registry: %s", err)
@@ -89,7 +114,8 @@ func setupEtcd(ctx context.Context, t *testing.T) (*EtcdRegistry, testcontainers
 		if err := registry.Close(); err != nil {
 			t.Logf("error closing registry: %s", err)
 		}
-		if err := etcdContainer.Terminate(ctx); err != nil {
+		// Use a background context for termination to avoid issues with canceled test contexts.
+		if err := etcdContainer.Terminate(context.Background()); err != nil {
 			t.Fatalf("failed to terminate etcd container: %s", err)
 		}
 	}

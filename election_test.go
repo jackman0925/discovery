@@ -30,23 +30,24 @@ func TestIntegration_Election_SingleCandidate(t *testing.T) {
 	})
 	assert.NoError(t, err)
 
-	// Campaign for leadership
+	// Campaign for leadership in a goroutine
 	go func() {
-		err := election.Campaign(ctx)
-		assert.NoError(t, err)
+		// The campaign will exit when the context is cancelled or leadership is lost.
+		_ = election.Campaign(ctx)
 	}()
 
-	// Give it a moment to win the election
-	time.Sleep(1 * time.Second)
+	// Assert that the candidate becomes the leader
+	assert.Eventually(t, func() bool {
+		return election.IsLeader()
+	}, 5*time.Second, 100*time.Millisecond, "candidate should become leader")
 
 	// Check who is the leader
 	leader, err := election.Leader(ctx)
 	assert.NoError(t, err)
 	assert.Equal(t, proposal, leader)
-	assert.True(t, election.IsLeader())
 
 	// Resign from leadership
-	err = election.Resign(ctx)
+	err = election.Resign(context.Background()) // Use a new context for resign
 	assert.NoError(t, err)
 
 	// Check that there is no leader
@@ -64,11 +65,8 @@ func TestIntegration_Election_MultipleCandidates(t *testing.T) {
 	defer cancel()
 
 	// Setup: Two separate registries (simulating two nodes)
-	reg1, _, cleanup1 := setupEtcd(ctx, t)
-	defer cleanup1()
-	reg2, err := NewEtcdRegistry(reg1.client.Endpoints(), WithLogger(reg1.logger))
-	assert.NoError(t, err)
-	defer reg2.Close()
+	reg1, reg2, cleanup := setupTwoRegistries(ctx, t)
+	defer cleanup()
 
 	electionName := "multi-candidate-test"
 	proposal1 := "candidate-1"
@@ -85,31 +83,17 @@ func TestIntegration_Election_MultipleCandidates(t *testing.T) {
 	// Candidate 1 campaigns and becomes leader
 	go func() {
 		defer wg.Done()
-		// This will block until it becomes leader
-		err := elec1.Campaign(ctx)
-		if err != nil {
-			t.Logf("elec1 campaign error: %v", err)
-		}
-		t.Log("elec1 became leader")
-
-		// Hold leadership for a few seconds
-		time.Sleep(4 * time.Second)
-
-		// Resign
-		t.Log("elec1 resigning")
-		err = elec1.Resign(context.Background()) // Use background context for resign
-		assert.NoError(t, err)
-		t.Log("elec1 resigned")
+		_ = elec1.Campaign(ctx)
+		t.Log("elec1 campaign ended")
 	}()
 
-	// Give candidate 1 a head start
-	time.Sleep(1 * time.Second)
+	// Assert that candidate 1 becomes the leader
+	assert.Eventually(t, func() bool { return elec1.IsLeader() }, 5*time.Second, 100*time.Millisecond, "elec1 should become leader")
 
-	// Verify candidate 1 is the leader
-	leader, err := elec2.Leader(ctx) // elec2 can check the leader
+	// Verify candidate 1 is the leader from another node's perspective
+	leader, err := elec2.Leader(ctx)
 	assert.NoError(t, err)
 	assert.Equal(t, proposal1, leader)
-	assert.True(t, elec1.IsLeader())
 	assert.False(t, elec2.IsLeader())
 
 	wg.Add(1)
@@ -117,29 +101,37 @@ func TestIntegration_Election_MultipleCandidates(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		t.Log("elec2 campaigning")
-		err := elec2.Campaign(ctx)
-		if err != nil {
-			t.Logf("elec2 campaign error: %v", err)
-		}
-		t.Log("elec2 became leader")
+		_ = elec2.Campaign(ctx)
+		t.Log("elec2 campaign ended")
 	}()
 
 	// Wait for a moment, elec2 should still be waiting
 	time.Sleep(1 * time.Second)
-	assert.False(t, elec2.IsLeader())
+	assert.False(t, elec2.IsLeader(), "elec2 should not be leader yet")
+
+	// Now, resign from elec1
+	t.Log("elec1 resigning")
+	err = elec1.Resign(context.Background())
+	assert.NoError(t, err)
+	t.Log("elec1 resigned")
 
 	// After elec1 resigns, elec2 should become the leader
-	time.Sleep(5 * time.Second) // Wait for resignation and new campaign to complete
+	assert.Eventually(t, func() bool { return elec2.IsLeader() }, 10*time.Second, 200*time.Millisecond, "elec2 should become leader")
 
-	leader, err = elec1.Leader(ctx) // elec1 can check the leader
+	// Verify from another node's perspective
+	observer, err := reg1.NewElection(ElectionOptions{ElectionName: electionName, Proposal: "observer"})
 	assert.NoError(t, err)
-	assert.Equal(t, proposal2, leader)
-	assert.False(t, elec1.IsLeader())
-	assert.True(t, elec2.IsLeader())
+	currentLeader, err := observer.Leader(ctx)
+	assert.NoError(t, err)
+	assert.Equal(t, proposal2, currentLeader)
+
+	// Final state check
+	assert.False(t, elec1.IsLeader(), "elec1 should not be leader after resigning")
+	assert.True(t, elec2.IsLeader(), "elec2 should be leader now")
 
 	// Cleanup
-	_ = elec2.Resign(context.Background())
-	wg.Wait()
+	cancel() // Cancel the main context to stop campaigns
+	wg.Wait()  // Wait for goroutines to finish
 }
 
 func TestIntegration_Election_Observe(t *testing.T) {
@@ -150,11 +142,8 @@ func TestIntegration_Election_Observe(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	reg1, _, cleanup1 := setupEtcd(ctx, t)
-	defer cleanup1()
-	reg2, err := NewEtcdRegistry(reg1.client.Endpoints(), WithLogger(reg1.logger))
-	assert.NoError(t, err)
-	defer reg2.Close()
+	reg1, reg2, cleanup := setupTwoRegistries(ctx, t)
+	defer cleanup()
 
 	electionName := "observe-test"
 
@@ -215,15 +204,12 @@ func TestIntegration_Election_SessionDone(t *testing.T) {
 		t.Skip("skipping integration test in short mode.")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
 	defer cancel()
 
-	reg1, _, cleanup1 := setupEtcd(ctx, t)
-	// NO defer cleanup1() here, we will close it manually
-
-	reg2, err := NewEtcdRegistry(reg1.client.Endpoints(), WithLogger(reg1.logger))
-	assert.NoError(t, err)
-	defer reg2.Close()
+	// Manually setup etcd container to have fine-grained control over cleanup
+	reg1, reg2, cleanup := setupTwoRegistries(ctx, t)
+	defer cleanup() // This will close reg2 and terminate the container
 
 	electionName := "session-done-test"
 
@@ -234,8 +220,10 @@ func TestIntegration_Election_SessionDone(t *testing.T) {
 
 	// Leader 1 campaigns and wins
 	campaignCtx, campaignCancel := context.WithCancel(ctx)
+	defer campaignCancel()
 	go func() { _ = elec1.Campaign(campaignCtx) }()
-	time.Sleep(1 * time.Second) // let it win
+
+	assert.Eventually(t, func() bool { return elec1.IsLeader() }, 5*time.Second, 100*time.Millisecond, "elec1 should become leader")
 
 	leader, err := elec2.Leader(ctx)
 	assert.NoError(t, err)
@@ -253,26 +241,38 @@ func TestIntegration_Election_SessionDone(t *testing.T) {
 
 	// Manually close the first registry's client to kill the session
 	t.Log("Closing registry 1 to kill leader session")
-	cleanup1() // This closes the client
+	err = reg1.Close() // This closes the client, killing the session
+	assert.NoError(t, err)
 
 	// Check that leadership was lost
 	select {
 	case <-leadershipLost:
-		// Success
 		t.Log("Successfully detected leadership loss via Done() channel")
 	case <-time.After(10 * time.Second):
 		t.Fatal("timeout waiting for leadership loss notification")
 	}
 
-	// Stop the first campaign goroutine
-	campaignCancel()
-
 	// Now, the second candidate should become the leader
-	time.Sleep(2 * time.Second) // give it time to campaign
+	assert.Eventually(t, func() bool {
+		leader, err := elec2.Leader(context.Background())
+		return err == nil && leader == "new-leader"
+	}, 10*time.Second, 200*time.Millisecond, "elec2 should become leader")
 
-	leader, err = elec2.Leader(ctx)
+	assert.True(t, elec2.IsLeader())
+}
+
+// setupTwoRegistries is a helper for tests needing two separate registry instances
+// sharing the same etcd container.
+func setupTwoRegistries(ctx context.Context, t *testing.T) (*EtcdRegistry, *EtcdRegistry, func()) {
+	reg1, _, cleanup1 := setupEtcd(ctx, t)
+
+	reg2, err := NewEtcdRegistry(reg1.client.Endpoints(), WithLogger(reg1.logger))
 	assert.NoError(t, err)
-	assert.Equal(t, "new-leader", leader)
 
-	_ = elec2.Resign(context.Background())
+	cleanup := func() {
+		_ = reg2.Close()
+		cleanup1() // This closes reg1 and terminates the container
+	}
+
+	return reg1, reg2, cleanup
 }

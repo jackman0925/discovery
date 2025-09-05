@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.1.0] - 2025-09-05
+
+### Added
+- **Leader Election**: Added a new leader election feature, allowing a single node among a group of services to be elected as a leader.
+- A new `Election` struct with methods like `Campaign`, `Resign`, `Leader`, `Observe`, and `IsLeader`.
+- A `NewElection` factory method on the `EtcdRegistry` to create election instances.
+- Comprehensive integration tests for the leader election feature in `election_test.go`.
+
+### Changed
+- Updated `README.md` with a new "Leader Election" section, including documentation and a complete usage example.
+- Improved the reliability of integration tests by replacing fixed `time.Sleep` calls with `assert.Eventually` to prevent race conditions.
+- Refactored test cleanup logic to use `context.Background()` when terminating test containers, fixing "context canceled" errors.
+
 ## [v0.0.1]
 
 ### Added

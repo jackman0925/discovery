@@ -109,8 +109,11 @@ func (e *Election) Done() <-chan struct{} {
 }
 
 // IsLeader returns true if this candidate is currently the leader.
+// Note: This method performs a network call to etcd to get the current leader.
 func (e *Election) IsLeader() bool {
-	// The leader key is only set if this candidate is the leader.
-	// See: https://github.com/etcd-io/etcd/blob/main/client/v3/concurrency/election.go
-	return e.election.Key() != ""
+	leader, err := e.Leader(context.Background())
+	if err != nil {
+		return false
+	}
+	return leader == e.opts.Proposal
 }
