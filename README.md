@@ -19,6 +19,20 @@ This library provides a clean, flexible, and resilient way to manage microservic
 - **Service Watching**: Watch for real-time changes in service instances (new instances, crashes, etc.).
 - **Leader Election**: Elect a single leader among a group of service instances to perform special tasks.
 
+## Installation
+
+```sh
+go get github.com/jackman0925/discovery
+```
+
+## Prerequisites
+
+This library requires a running **etcd v3** cluster. You can easily start one for development using Docker:
+
+```sh
+docker run -d -p 2379:2379 --name etcd-gcr-v3.5.0 gcr.io/etcd-development/etcd:v3.5.0 /usr/local/bin/etcd --listen-client-urls http://0.0.0.0:2379 --advertise-client-urls http://0.0.0.0:2379
+```
+
 ## Leader Election
 
 In addition to service discovery, the library supports leader election. This is useful in distributed systems where you need to ensure that only one instance of a service is performing a specific task at any given time (e.g., running a cron job, processing a queue, etc.).
@@ -34,7 +48,6 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
 	"os"
 	"sync"
@@ -44,19 +57,25 @@ import (
 )
 
 func main() {
-	logger := log.New(os.Stdout, "[ELECTION-EXAMPLE] ", log.LstdFlags)
+	// Use a standard logger for the example's own output
+	stdLogger := log.New(os.Stdout, "[ELECTION-EXAMPLE] ", log.LstdFlags)
+
+	// Create a logger option for the discovery library.
+	// For production, you might use LogLevelWarn to reduce noise.
+	libLoggerOption := discovery.WithLoggerAndLevel(stdLogger, discovery.LogLevelInfo)
+
 	etcdEndpoints := []string{"localhost:2379"}
 
 	// Create two separate registry instances to simulate two different nodes
-	reg1, err := discovery.NewEtcdRegistry(etcdEndpoints, discovery.WithLogger(logger))
+	reg1, err := discovery.NewEtcdRegistry(etcdEndpoints, libLoggerOption)
 	if err != nil {
-		log.Fatalf("Failed to create registry 1: %v", err)
+		stdLogger.Fatalf("Failed to create registry 1: %v", err)
 	}
 	defer reg1.Close()
 
-	reg2, err := discovery.NewEtcdRegistry(etcdEndpoints, discovery.WithLogger(logger))
+	reg2, err := discovery.NewEtcdRegistry(etcdEndpoints, libLoggerOption)
 	if err != nil {
-		log.Fatalf("Failed to create registry 2: %v", err)
+		stdLogger.Fatalf("Failed to create registry 2: %v", err)
 	}
 	defer reg2.Close()
 
@@ -71,24 +90,25 @@ func main() {
 			Proposal:     "candidate-1",
 		})
 		if err != nil {
-			logger.Printf("candidate-1: failed to create election: %v", err)
+			stdLogger.Printf("candidate-1: failed to create election: %v", err)
 			return
 		}
 
+		stdLogger.Println("candidate-1: Campaigning for leadership...")
 		// Campaign for leadership. This call blocks until leadership is won or the context is cancelled.
 		if err := election.Campaign(context.Background()); err != nil {
-			logger.Printf("candidate-1: campaign failed: %v", err)
+			stdLogger.Printf("candidate-1: campaign failed: %v", err)
 			return
 		}
 
-		logger.Println("candidate-1: I am the leader!")
+		stdLogger.Println("candidate-1: I am the leader!")
 
 		// Hold leadership for 10 seconds, then resign.
 		time.Sleep(10 * time.Second)
 
-		logger.Println("candidate-1: Resigning from leadership.")
+		stdLogger.Println("candidate-1: Resigning from leadership.")
 		if err := election.Resign(context.Background()); err != nil {
-			logger.Printf("candidate-1: failed to resign: %v", err)
+			stdLogger.Printf("candidate-1: failed to resign: %v", err)
 		}
 	}()
 
@@ -103,35 +123,28 @@ func main() {
 			Proposal:     "candidate-2",
 		})
 		if err != nil {
-			logger.Printf("candidate-2: failed to create election: %v", err)
+			stdLogger.Printf("candidate-2: failed to create election: %v", err)
 			return
 		}
 
-		logger.Println("candidate-2: Campaigning for leadership...")
+		stdLogger.Println("candidate-2: Campaigning for leadership...")
 		if err := election.Campaign(context.Background()); err != nil {
-			logger.Printf("candidate-2: campaign failed: %v", err)
+			stdLogger.Printf("candidate-2: campaign failed: %v", err)
 			return
 		}
 
 		// This part will only execute after candidate-1 has resigned.
-		logger.Println("candidate-2: I am the leader now!")
+		stdLogger.Println("candidate-2: I am the leader now!")
 		time.Sleep(5 * time.Second)
-		logger.Println("candidate-2: Resigning from leadership.")
+		stdLogger.Println("candidate-2: Resigning from leadership.")
 		if err := election.Resign(context.Background()); err != nil {
-			logger.Printf("candidate-2: failed to resign: %v", err)
+			stdLogger.Printf("candidate-2: failed to resign: %v", err)
 		}
 	}()
 
 	wg.Wait()
-	logger.Println("Example finished.")
+	stdLogger.Println("Example finished.")
 }
-
-```
-
-## Installation
-
-```sh
-go get github.com/jackman0925/discovery
 ```
 
 ## Usage
@@ -153,20 +166,25 @@ import (
 
 func main() {
 	// Use the standard logger for this example
-	logger := log.New(os.Stdout, "[DISCOVERY-EXAMPLE] ", log.LstdFlags)
+	stdLogger := log.New(os.Stdout, "[DISCOVERY-EXAMPLE] ", log.LstdFlags)
+	
+	// Create a logger option for the discovery library
+	// For production environments, you might want to use a lower log level to reduce log volume
+	loggerOption := discovery.WithLoggerAndLevel(stdLogger, discovery.LogLevelWarn)
 
 	// Create a new registry instance
 	registry, err := discovery.NewEtcdRegistry(
-		[]string{"localhost:2379"}, // Etcd server endpoints
-		discovery.WithTTL(15),             // Set lease TTL to 15 seconds
-		discovery.WithNamespace("prod"),   // Set a namespace for services
-		discovery.WithLogger(logger),      // Provide a logger
+		[]string{"localhost:2379"},      // Etcd server endpoints
+		discovery.WithTTL(15),           // Set lease TTL to 15 seconds
+		discovery.WithNamespace("prod"), // Set a namespace for services
+		loggerOption,                    // Provide the logger option
 	)
 	if err != nil {
 		log.Fatalf("Failed to create etcd registry: %v", err)
 	}
 
-	// Ensure the registry is closed on exit
+	// It's crucial to close the registry to deregister the service and release resources.
+	// defer is a great way to ensure this happens on exit.
 	defer registry.Close()
 
 	// Define the service to be registered
@@ -178,7 +196,8 @@ func main() {
 		Version: "1.0.2",
 	}
 
-	// Register the service
+	// Register the service.
+	// Use a context with a timeout for the registration call to avoid blocking indefinitely.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := registry.Register(ctx, serviceInfo); err != nil {
@@ -224,4 +243,41 @@ The `NewEtcdRegistry` function accepts the following `Option` functions for conf
 | `WithAuth(user, pass)`  | Sets the username and password for etcd authentication.     |
 | `WithKeyPrefix(string)` | Sets the root prefix for all keys (default: `/etcd_registry`). |
 | `WithLogger(Logger)`    | Provides a custom logger that implements the `Logger` interface. |
+| `WithLogLevel(level)`   | Sets the log level for the registry (default: `LogLevelInfo`). |
+| `WithLoggerAndLevel(logger, level)` | Convenience function that sets both logger and level. |
 | `WithDialTimeout(d)`    | Sets the dial timeout for the etcd client.                |
+
+## Log Levels
+
+The library supports four log levels:
+
+- `LogLevelError`: Only logs errors
+- `LogLevelWarn`: Logs warnings and errors
+- `LogLevelInfo`: Logs info, warnings, and errors (default)
+- `LogLevelDebug`: Logs all messages including debug
+
+### Production Environment Example
+
+For production environments where you want to reduce log volume:
+
+```go
+registry, err := discovery.NewEtcdRegistry(
+    []string{"localhost:2379"},
+    discovery.WithLoggerAndLevel(myLogger, discovery.LogLevelWarn), // Only log warnings and errors
+    discovery.WithTTL(15),
+    discovery.WithNamespace("prod"),
+)
+```
+
+### Development Environment Example
+
+For development environments where you want detailed logging:
+
+```go
+registry, err := discovery.NewEtcdRegistry(
+    []string{"localhost:2379"},
+    discovery.WithLoggerAndLevel(myLogger, discovery.LogLevelDebug), // Log everything
+    discovery.WithTTL(15),
+    discovery.WithNamespace("dev"),
+)
+```

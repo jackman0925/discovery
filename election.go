@@ -37,13 +37,13 @@ type ElectionOptions struct {
 // After winning, it will hold the leadership until the context is cancelled,
 // the underlying session is closed, or Resign is called.
 func (e *Election) Campaign(ctx context.Context) error {
-	e.registry.logger.Printf("[INFO] Campaigning for leadership in election '%s' with proposal '%s'", e.opts.ElectionName, e.opts.Proposal)
+	e.registry.logger.Infof("Campaigning for leadership in election '%s' with proposal '%s'", e.opts.ElectionName, e.opts.Proposal)
 	err := e.election.Campaign(ctx, e.opts.Proposal)
 	if err != nil {
-		e.registry.logger.Printf("[ERROR] Failed to campaign for leadership in election '%s': %v", e.opts.ElectionName, err)
+		e.registry.logger.Errorf("Failed to campaign for leadership in election '%s': %v", e.opts.ElectionName, err)
 		return fmt.Errorf("failed to campaign for leadership: %w", err)
 	}
-	e.registry.logger.Printf("[INFO] Won leadership in election '%s'", e.opts.ElectionName)
+	e.registry.logger.Infof("Won leadership in election '%s'", e.opts.ElectionName)
 	return nil
 }
 
@@ -92,10 +92,10 @@ func (e *Election) Observe(ctx context.Context) <-chan string {
 // Resign gives up leadership. If the candidate is not a leader, this is a no-op.
 // It returns an error if the resignation fails.
 func (e *Election) Resign(ctx context.Context) error {
-	e.registry.logger.Printf("[INFO] Resigning from leadership in election '%s'", e.opts.ElectionName)
+	e.registry.logger.Infof("Resigning from leadership in election '%s'", e.opts.ElectionName)
 	err := e.election.Resign(ctx)
 	if err != nil {
-		e.registry.logger.Printf("[ERROR] Failed to resign from leadership: %v", err)
+		e.registry.logger.Errorf("Failed to resign from leadership: %v", err)
 		return fmt.Errorf("failed to resign: %w", err)
 	}
 	// Closing the session ensures all resources are released.

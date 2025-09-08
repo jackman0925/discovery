@@ -11,15 +11,71 @@ import (
 	"go.etcd.io/etcd/client/v3/concurrency"
 )
 
+// LogLevel represents the level of logging.
+type LogLevel int
+
+const (
+	// LogLevelError logs only errors.
+	LogLevelError LogLevel = iota
+	// LogLevelWarn logs warnings and errors.
+	LogLevelWarn
+	// LogLevelInfo logs info, warnings, and errors.
+	LogLevelInfo
+	// LogLevelDebug logs all messages including debug.
+	LogLevelDebug
+)
+
 // Logger defines the interface for logging. This allows users to use their own logger.
 type Logger interface {
-	Printf(format string, v ...interface{})
+	Errorf(format string, v ...interface{})
+	Warnf(format string, v ...interface{})
+	Infof(format string, v ...interface{})
+	Debugf(format string, v ...interface{})
 }
 
 // discardLogger is a logger that outputs nothing.
 type discardLogger struct{}
 
-func (dl *discardLogger) Printf(format string, v ...interface{}) {}
+func (dl *discardLogger) Errorf(format string, v ...interface{}) {}
+func (dl *discardLogger) Warnf(format string, v ...interface{})  {}
+func (dl *discardLogger) Infof(format string, v ...interface{})  {}
+func (dl *discardLogger) Debugf(format string, v ...interface{}) {}
+
+// leveledLogger wraps a standard logger and implements the Logger interface with level control.
+type leveledLogger struct {
+	logger interface {
+		Printf(format string, v ...interface{})
+	}
+	level LogLevel
+}
+
+// Errorf logs an error message if the current level allows it.
+func (l *leveledLogger) Errorf(format string, v ...interface{}) {
+	if l.level >= LogLevelError {
+		l.logger.Printf("[ERROR] "+format, v...)
+	}
+}
+
+// Warnf logs a warning message if the current level allows it.
+func (l *leveledLogger) Warnf(format string, v ...interface{}) {
+	if l.level >= LogLevelWarn {
+		l.logger.Printf("[WARN] "+format, v...)
+	}
+}
+
+// Infof logs an info message if the current level allows it.
+func (l *leveledLogger) Infof(format string, v ...interface{}) {
+	if l.level >= LogLevelInfo {
+		l.logger.Printf("[INFO] "+format, v...)
+	}
+}
+
+// Debugf logs a debug message if the current level allows it.
+func (l *leveledLogger) Debugf(format string, v ...interface{}) {
+	if l.level >= LogLevelDebug {
+		l.logger.Printf("[DEBUG] "+format, v...)
+	}
+}
 
 // ServiceInfo holds information about a registered service.
 type ServiceInfo struct {
@@ -42,6 +98,7 @@ type Options struct {
 	DialKeepAliveTime time.Duration
 	KeyPrefix         string
 	Logger            Logger
+	LogLevel          LogLevel
 }
 
 // Option configures an EtcdRegistry.
@@ -90,6 +147,27 @@ func WithLogger(logger Logger) Option {
 	}
 }
 
+// WithLogLevel sets the log level for the registry.
+func WithLogLevel(level LogLevel) Option {
+	return func(o *Options) {
+		o.LogLevel = level
+	}
+}
+
+// WithLoggerAndLevel sets both the logger and log level for the registry.
+// This is a convenience function that wraps the provided logger with a leveled logger.
+func WithLoggerAndLevel(logger interface {
+	Printf(format string, v ...interface{})
+}, level LogLevel) Option {
+	return func(o *Options) {
+		o.Logger = &leveledLogger{
+			logger: logger,
+			level:  level,
+		}
+		o.LogLevel = level
+	}
+}
+
 // EtcdRegistry provides service registration and discovery using etcd.
 type EtcdRegistry struct {
 	client      *clientv3.Client
@@ -111,6 +189,7 @@ func NewEtcdRegistry(endpoints []string, opts ...Option) (*EtcdRegistry, error) 
 		DialKeepAliveTime: 10 * time.Second,
 		KeyPrefix:         "/etcd_registry",
 		Logger:            &discardLogger{}, // Default to a silent logger
+		LogLevel:          LogLevelInfo,     // Default to info level
 	}
 
 	for _, o := range opts {
@@ -118,7 +197,7 @@ func NewEtcdRegistry(endpoints []string, opts ...Option) (*EtcdRegistry, error) 
 	}
 
 	if options.TTL < 10 {
-		options.Logger.Printf("[WARN] TTL(%d) is very low. It is recommended to set it to 10 seconds or more.", options.TTL)
+		options.Logger.Warnf("TTL(%d) is very low. It is recommended to set it to 10 seconds or more.", options.TTL)
 	}
 
 	config := clientv3.Config{
@@ -129,11 +208,11 @@ func NewEtcdRegistry(endpoints []string, opts ...Option) (*EtcdRegistry, error) 
 		Password:          options.Password,
 	}
 
-	options.Logger.Printf("[INFO] Attempting to connect to etcd servers: %v", endpoints)
+	options.Logger.Infof("Attempting to connect to etcd servers: %v", endpoints)
 	client, err := clientv3.New(config)
 	if err != nil {
 		errMsg := fmt.Sprintf("failed to create etcd client: %v, endpoints: %v", err, endpoints)
-		options.Logger.Printf("[ERROR] %s", errMsg)
+		options.Logger.Errorf("%s", errMsg)
 		return nil, fmt.Errorf("failed to create etcd client: %w", err)
 	}
 
@@ -143,10 +222,10 @@ func NewEtcdRegistry(endpoints []string, opts ...Option) (*EtcdRegistry, error) 
 	if _, err = client.Status(ctx, endpoints[0]); err != nil {
 		client.Close()
 		errMsg := fmt.Sprintf("failed to connect to etcd: %v, endpoints: %v", err, endpoints)
-		options.Logger.Printf("[ERROR] %s", errMsg)
+		options.Logger.Errorf("%s", errMsg)
 		return nil, fmt.Errorf(errMsg)
 	}
-	options.Logger.Printf("[INFO] Successfully connected to etcd server.")
+	options.Logger.Infof("Successfully connected to etcd server.")
 
 	return &EtcdRegistry{
 		client:     client,
@@ -175,36 +254,36 @@ func (e *EtcdRegistry) Register(ctx context.Context, info *ServiceInfo) error {
 
 	e.serviceInfo = info
 
-	e.logger.Printf("[INFO] Preparing to register service: %s (ID: %s)", info.Name, info.ID)
+	e.logger.Infof("Preparing to register service: %s (ID: %s)", info.Name, info.ID)
 
 	data, err := json.Marshal(info)
 	if err != nil {
-		e.logger.Printf("[ERROR] Failed to serialize service info: %v", err)
+		e.logger.Errorf("Failed to serialize service info: %v", err)
 		return fmt.Errorf("failed to serialize service info: %w", err)
 	}
 
-	e.logger.Printf("[INFO] Creating etcd lease, TTL=%d seconds", e.opts.TTL)
+	e.logger.Infof("Creating etcd lease, TTL=%d seconds", e.opts.TTL)
 	lease, err := e.client.Grant(ctx, e.opts.TTL)
 	if err != nil {
-		e.logger.Printf("[ERROR] Failed to create etcd lease: %v", err)
+		e.logger.Errorf("Failed to create etcd lease: %v", err)
 		return fmt.Errorf("failed to create etcd lease: %w", err)
 	}
 	e.leaseID = lease.ID
-	e.logger.Printf("[INFO] Successfully created lease, ID=%d", lease.ID)
+	e.logger.Infof("Successfully created lease, ID=%d", lease.ID)
 
 	key := e.getServiceKey(info.Name, info.ID)
-	e.logger.Printf("[INFO] Registering service with key: %s", key)
+	e.logger.Infof("Registering service with key: %s", key)
 	_, err = e.client.Put(ctx, key, string(data), clientv3.WithLease(lease.ID))
 	if err != nil {
-		e.logger.Printf("[ERROR] Failed to register service: %v, key: %s", err, key)
+		e.logger.Errorf("Failed to register service: %v, key: %s", err, key)
 		return fmt.Errorf("failed to register service: %w", err)
 	}
-	e.logger.Printf("[INFO] Successfully wrote service registration.")
+	e.logger.Infof("Successfully wrote service registration.")
 
 	e.wg.Add(1)
 	go e.keepAlive()
 
-	e.logger.Printf("[INFO] Service [%s] successfully registered to etcd. Node ID: %s, Address: %s:%s",
+	e.logger.Infof("Service [%s] successfully registered to etcd. Node ID: %s, Address: %s:%s",
 		info.Name, info.ID, info.Address, info.Port)
 	return nil
 }
@@ -216,11 +295,11 @@ func (e *EtcdRegistry) keepAlive() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	e.logger.Printf("[INFO] Starting keep-alive for service [%s] (LeaseID: %d)", e.serviceInfo.Name, e.leaseID)
+	e.logger.Infof("Starting keep-alive for service [%s] (LeaseID: %d)", e.serviceInfo.Name, e.leaseID)
 
 	keepAliveChan, err := e.client.KeepAlive(ctx, e.leaseID)
 	if err != nil {
-		e.logger.Printf("[ERROR] Failed to create keep-alive: %v. Attempting to re-register...", err)
+		e.logger.Errorf("Failed to create keep-alive: %v. Attempting to re-register...", err)
 		e.reRegister()
 		return
 	}
@@ -228,27 +307,27 @@ func (e *EtcdRegistry) keepAlive() {
 	for {
 		select {
 		case <-e.stopSignal:
-			e.logger.Printf("[INFO] Received stop signal, stopping keep-alive for service [%s]", e.serviceInfo.Name)
+			e.logger.Infof("Received stop signal, stopping keep-alive for service [%s]", e.serviceInfo.Name)
 			return
 		case resp, ok := <-keepAliveChan:
 			if !ok {
-				e.logger.Printf("[WARN] Keep-alive channel closed for service [%s]. It may have expired. Attempting to re-register...", e.serviceInfo.Name)
+				e.logger.Warnf("Keep-alive channel closed for service [%s]. It may have expired. Attempting to re-register...", e.serviceInfo.Name)
 				e.reRegister()
 				return
 			}
-			e.logger.Printf("[DEBUG] Keep-alive for service [%s] is healthy. New TTL: %d", e.serviceInfo.Name, resp.TTL)
+			e.logger.Debugf("Keep-alive for service [%s] is healthy. New TTL: %d", e.serviceInfo.Name, resp.TTL)
 		}
 	}
 }
 
 // reRegister attempts to re-register the service in the background.
 func (e *EtcdRegistry) reRegister() {
-	e.logger.Printf("[INFO] Preparing to re-register service [%s] in the background", e.serviceInfo.Name)
+	e.logger.Infof("Preparing to re-register service [%s] in the background", e.serviceInfo.Name)
 	go func() {
 		for {
 			select {
 			case <-e.stopSignal:
-				e.logger.Printf("[INFO] Stopping re-registration for service [%s]", e.serviceInfo.Name)
+				e.logger.Infof("Stopping re-registration for service [%s]", e.serviceInfo.Name)
 				return
 			default:
 			}
@@ -257,11 +336,11 @@ func (e *EtcdRegistry) reRegister() {
 			err := e.Register(ctx, e.serviceInfo)
 			cancel()
 			if err == nil {
-				e.logger.Printf("[INFO] Service [%s] re-registered successfully", e.serviceInfo.Name)
+				e.logger.Infof("Service [%s] re-registered successfully", e.serviceInfo.Name)
 				return
 			}
 
-			e.logger.Printf("[ERROR] Failed to re-register service [%s], will retry in 5 seconds...", e.serviceInfo.Name)
+			e.logger.Errorf("Failed to re-register service [%s], will retry in 5 seconds...", e.serviceInfo.Name)
 			time.Sleep(5 * time.Second)
 		}
 	}()
@@ -276,16 +355,16 @@ func (e *EtcdRegistry) Deregister() error {
 		}
 		close(e.stopSignal)
 		e.wg.Wait()
-		e.logger.Printf("[INFO] Revoking lease (ID: %d) for service [%s]", e.leaseID, e.serviceInfo.Name)
+		e.logger.Infof("Revoking lease (ID: %d) for service [%s]", e.leaseID, e.serviceInfo.Name)
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 		defer cancel()
 		_, err = e.client.Revoke(ctx, e.leaseID)
 		if err != nil {
-			e.logger.Printf("[ERROR] Failed to revoke lease: %v", err)
+			e.logger.Errorf("Failed to revoke lease: %v", err)
 			err = fmt.Errorf("failed to revoke lease: %w", err)
 			return
 		}
-		e.logger.Printf("[INFO] Service [%s] successfully deregistered from etcd", e.serviceInfo.Name)
+		e.logger.Infof("Service [%s] successfully deregistered from etcd", e.serviceInfo.Name)
 	})
 	return err
 }
@@ -293,7 +372,7 @@ func (e *EtcdRegistry) Deregister() error {
 // Close safely shuts down the registry.
 func (e *EtcdRegistry) Close() error {
 	if err := e.Deregister(); err != nil {
-		e.logger.Printf("[WARN] An error occurred during deregistration: %v", err)
+		e.logger.Warnf("An error occurred during deregistration: %v", err)
 	}
 
 	if e.client != nil {
@@ -302,26 +381,26 @@ func (e *EtcdRegistry) Close() error {
 		}
 	}
 
-	e.logger.Printf("[INFO] Etcd client successfully closed.")
+	e.logger.Infof("Etcd client successfully closed.")
 	return nil
 }
 
 // GetService retrieves all instances of a specific service.
 func (e *EtcdRegistry) GetService(ctx context.Context, name string) ([]*ServiceInfo, error) {
 	keyPrefix := fmt.Sprintf("%s/%s/services/%s/", e.opts.KeyPrefix, e.opts.Namespace, name)
-	e.logger.Printf("[INFO] Getting service list with key prefix: %s", keyPrefix)
+	e.logger.Infof("Getting service list with key prefix: %s", keyPrefix)
 	resp, err := e.client.Get(ctx, keyPrefix, clientv3.WithPrefix())
 	if err != nil {
-		e.logger.Printf("[ERROR] Failed to get service list: %v", err)
+		e.logger.Errorf("Failed to get service list: %v", err)
 		return nil, fmt.Errorf("failed to get service list: %w", err)
 	}
 
-	e.logger.Printf("[INFO] Found %d service instances", len(resp.Kvs))
+	e.logger.Infof("Found %d service instances", len(resp.Kvs))
 	services := make([]*ServiceInfo, 0, len(resp.Kvs))
 	for _, kv := range resp.Kvs {
 		var service ServiceInfo
 		if err := json.Unmarshal(kv.Value, &service); err != nil {
-			e.logger.Printf("[ERROR] Failed to parse service info: %v, key: %s", err, string(kv.Key))
+			e.logger.Errorf("Failed to parse service info: %v, key: %s", err, string(kv.Key))
 			continue
 		}
 		services = append(services, &service)
@@ -333,7 +412,7 @@ func (e *EtcdRegistry) GetService(ctx context.Context, name string) ([]*ServiceI
 // WatchService watches for changes in a service and triggers a callback.
 func (e *EtcdRegistry) WatchService(ctx context.Context, name string, callback func([]*ServiceInfo)) error {
 	keyPrefix := fmt.Sprintf("%s/%s/services/%s/", e.opts.KeyPrefix, e.opts.Namespace, name)
-	e.logger.Printf("[INFO] Watching for service changes with key prefix: %s", keyPrefix)
+	e.logger.Infof("Watching for service changes with key prefix: %s", keyPrefix)
 
 	initialServices, err := e.GetService(ctx, name)
 	if err != nil {
@@ -346,17 +425,17 @@ func (e *EtcdRegistry) WatchService(ctx context.Context, name string, callback f
 		for {
 			select {
 			case <-ctx.Done():
-				e.logger.Printf("[INFO] Context for watching service [%s] is cancelled, stopping watch.", name)
+				e.logger.Infof("Context for watching service [%s] is cancelled, stopping watch.", name)
 				return
 			case resp := <-watchChan:
 				if resp.Canceled {
-					e.logger.Printf("[WARN] Watch for service [%s] was cancelled by etcd", name)
+					e.logger.Warnf("Watch for service [%s] was cancelled by etcd", name)
 					return
 				}
-				e.logger.Printf("[INFO] Service [%s] changed, re-fetching list", name)
+				e.logger.Infof("Service [%s] changed, re-fetching list", name)
 				services, err := e.GetService(ctx, name)
 				if err != nil {
-					e.logger.Printf("[ERROR] Failed to get service list during watch: %v", err)
+					e.logger.Errorf("Failed to get service list during watch: %v", err)
 					continue
 				}
 				callback(services)
@@ -374,7 +453,7 @@ func (e *EtcdRegistry) DeleteServiceKey(ctx context.Context, name, id string) er
 	}
 
 	key := e.getServiceKey(name, id)
-	e.logger.Printf("[INFO] Deleting service registration key: %s", key)
+	e.logger.Infof("Deleting service registration key: %s", key)
 
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -384,7 +463,7 @@ func (e *EtcdRegistry) DeleteServiceKey(ctx context.Context, name, id string) er
 
 	resp, err := e.client.Delete(ctx, key)
 	if err != nil {
-		e.logger.Printf("[ERROR] Failed to delete service key: %v, key: %s", err, key)
+		e.logger.Errorf("Failed to delete service key: %v, key: %s", err, key)
 		return fmt.Errorf("failed to delete service key: %w", err)
 	}
 
@@ -392,7 +471,7 @@ func (e *EtcdRegistry) DeleteServiceKey(ctx context.Context, name, id string) er
 		return fmt.Errorf("service key does not exist: %s", key)
 	}
 
-	e.logger.Printf("[INFO] Successfully deleted service key: %s", key)
+	e.logger.Infof("Successfully deleted service key: %s", key)
 	return nil
 }
 
@@ -403,7 +482,7 @@ func (e *EtcdRegistry) DeleteServiceByPrefix(ctx context.Context, namePrefix str
 	}
 
 	keyPrefix := fmt.Sprintf("%s/%s/services/%s", e.opts.KeyPrefix, e.opts.Namespace, namePrefix)
-	e.logger.Printf("[INFO] Deleting services by prefix: %s", keyPrefix)
+	e.logger.Infof("Deleting services by prefix: %s", keyPrefix)
 
 	if _, ok := ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
@@ -413,11 +492,11 @@ func (e *EtcdRegistry) DeleteServiceByPrefix(ctx context.Context, namePrefix str
 
 	resp, err := e.client.Delete(ctx, keyPrefix, clientv3.WithPrefix())
 	if err != nil {
-		e.logger.Printf("[ERROR] Failed to delete services by prefix: %v, keyPrefix: %s", err, keyPrefix)
+		e.logger.Errorf("Failed to delete services by prefix: %v, keyPrefix: %s", err, keyPrefix)
 		return 0, fmt.Errorf("failed to delete services by prefix: %w", err)
 	}
 
-	e.logger.Printf("[INFO] Successfully deleted %d services (prefix: %s)", resp.Deleted, keyPrefix)
+	e.logger.Infof("Successfully deleted %d services (prefix: %s)", resp.Deleted, keyPrefix)
 	return resp.Deleted, nil
 }
 

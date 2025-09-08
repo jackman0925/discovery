@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.0] - 2025-09-08
+
+### Changed
+- **[BREAKING CHANGE]** Refactored the logging mechanism to be more flexible and modern.
+  - The `Logger` interface no longer includes the `Printf` method. It now exclusively uses leveled methods: `Errorf`, `Warnf`, `Infof`, and `Debugf`.
+  - The `WithLoggerAndLevel` option remains available to easily adapt standard Go loggers (which have a `Printf` method).
+- Updated `README.md` with a new `Prerequisites` section, including a Docker command to start an etcd instance.
+- Re-ordered sections in `README.md` for better readability.
+
+### Fixed
+- Corrected and improved the code examples in `README.md` to make them runnable and to better demonstrate library usage.
+
 ## [v0.1.0] - 2025-09-05
 
 ### Added

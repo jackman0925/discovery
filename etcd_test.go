@@ -78,11 +78,12 @@ func setupEtcd(ctx context.Context, t *testing.T) (*EtcdRegistry, testcontainers
 	endpoints := []string{endpoint}
 
 	// Use the standard log library for test output for easier debugging.
-	logger := log.New(os.Stdout, "[ETCD-TEST] ", log.LstdFlags)
+	stdLogger := log.New(os.Stdout, "[ETCD-TEST] ", log.LstdFlags)
+	logger := &leveledLogger{logger: stdLogger, level: LogLevelDebug}
 
 	// ---- START NEW DIAGNOSTIC CODE ----
-	logger.Printf("Container started. Mapped endpoint: %s", endpoint)
-	logger.Printf("Attempting to establish initial connection for status check...")
+	stdLogger.Printf("Container started. Mapped endpoint: %s", endpoint)
+	stdLogger.Printf("Attempting to establish initial connection for status check...")
 
 	// Create a temporary, minimal client just to check the connection status.
 	tempClient, err := clientv3.New(clientv3.Config{
@@ -101,7 +102,7 @@ func setupEtcd(ctx context.Context, t *testing.T) (*EtcdRegistry, testcontainers
 	if err != nil {
 		t.Fatalf("failed to get status from etcd endpoint %s: %s", endpoint, err)
 	}
-	logger.Printf("Status check successful. Endpoint is responsive.")
+	stdLogger.Printf("Status check successful. Endpoint is responsive.")
 	// ---- END NEW DIAGNOSTIC CODE ----
 
 	registry, err := NewEtcdRegistry(endpoints, WithLogger(logger), WithTTL(5)) // Use a short TTL for testing
@@ -354,7 +355,8 @@ func TestIntegration_ErrorScenarios(t *testing.T) {
 	t.Run("NewEtcdRegistry with invalid endpoint", func(t *testing.T) {
 		// Use a non-routable IP address and a random port
 		invalidEndpoints := []string{"192.0.2.1:12345"}
-		logger := log.New(os.Stdout, "[ETCD-TEST-ERROR] ", log.LstdFlags)
+		stdLogger := log.New(os.Stdout, "[ETCD-TEST-ERROR] ", log.LstdFlags)
+		logger := &leveledLogger{logger: stdLogger, level: LogLevelDebug}
 
 		_, err := NewEtcdRegistry(invalidEndpoints, WithLogger(logger), WithDialTimeout(1*time.Second))
 		assert.Error(t, err)
