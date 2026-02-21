@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [v0.2.1] - 2026-02-21
+
+### Added
+- Added `GetNamespaceServices` and `WatchNamespace` to support full service watching within a namespace.
+- Added integration test `TestIntegration_WatchNamespace` for namespace-level watch behavior.
+- Added unit tests for watch/get edge cases on uninitialized client and nil callback.
+
+### Fixed
+- Added defensive checks in `GetService`, `GetNamespaceServices`, `WatchService`, and `WatchNamespace` to return clear errors when etcd client is not initialized.
+- Added callback validation for `WatchService` and `WatchNamespace` to prevent nil callback panic.
+- Improved watch loop stability by handling closed watch channels (`ok == false`) in both `WatchService` and `WatchNamespace`.
+
 ## [v0.2.0] - 2025-09-08
 
 ### Changed

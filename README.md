@@ -215,6 +215,39 @@ func main() {
 }
 ```
 
+## Service Watching
+
+You can watch service changes in two ways:
+
+- `WatchService`: watch a single service name (e.g. only `my-awesome-api`).
+- `WatchNamespace`: watch all services in the current namespace.
+
+### Watch a single service
+
+```go
+serviceName := "my-awesome-api"
+
+err := registry.WatchService(context.Background(), serviceName, func(services []*discovery.ServiceInfo) {
+	// services contains all current instances of my-awesome-api
+	fmt.Printf("service %s now has %d instance(s)\n", serviceName, len(services))
+})
+if err != nil {
+	log.Fatalf("watch service failed: %v", err)
+}
+```
+
+### Watch all services in a namespace
+
+```go
+err := registry.WatchNamespace(context.Background(), func(services []*discovery.ServiceInfo) {
+	// services contains all current instances under the configured namespace
+	fmt.Printf("namespace now has %d total instance(s)\n", len(services))
+})
+if err != nil {
+	log.Fatalf("watch namespace failed: %v", err)
+}
+```
+
 ## Testing
 
 The library has a comprehensive test suite that includes both unit and integration tests.

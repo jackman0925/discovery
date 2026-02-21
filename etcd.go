@@ -387,6 +387,10 @@ func (e *EtcdRegistry) Close() error {
 
 // GetService retrieves all instances of a specific service.
 func (e *EtcdRegistry) GetService(ctx context.Context, name string) ([]*ServiceInfo, error) {
+	if e.client == nil {
+		return nil, fmt.Errorf("etcd client is not initialized")
+	}
+
 	keyPrefix := fmt.Sprintf("%s/%s/services/%s/", e.opts.KeyPrefix, e.opts.Namespace, name)
 	e.logger.Infof("Getting service list with key prefix: %s", keyPrefix)
 	resp, err := e.client.Get(ctx, keyPrefix, clientv3.WithPrefix())
@@ -409,8 +413,43 @@ func (e *EtcdRegistry) GetService(ctx context.Context, name string) ([]*ServiceI
 	return services, nil
 }
 
+// GetNamespaceServices retrieves all service instances in the current namespace.
+func (e *EtcdRegistry) GetNamespaceServices(ctx context.Context) ([]*ServiceInfo, error) {
+	if e.client == nil {
+		return nil, fmt.Errorf("etcd client is not initialized")
+	}
+
+	keyPrefix := fmt.Sprintf("%s/%s/services/", e.opts.KeyPrefix, e.opts.Namespace)
+	e.logger.Infof("Getting namespace service list with key prefix: %s", keyPrefix)
+	resp, err := e.client.Get(ctx, keyPrefix, clientv3.WithPrefix())
+	if err != nil {
+		e.logger.Errorf("Failed to get namespace service list: %v", err)
+		return nil, fmt.Errorf("failed to get namespace service list: %w", err)
+	}
+
+	e.logger.Infof("Found %d service instances in namespace [%s]", len(resp.Kvs), e.opts.Namespace)
+	services := make([]*ServiceInfo, 0, len(resp.Kvs))
+	for _, kv := range resp.Kvs {
+		var service ServiceInfo
+		if err := json.Unmarshal(kv.Value, &service); err != nil {
+			e.logger.Errorf("Failed to parse service info: %v, key: %s", err, string(kv.Key))
+			continue
+		}
+		services = append(services, &service)
+	}
+
+	return services, nil
+}
+
 // WatchService watches for changes in a service and triggers a callback.
 func (e *EtcdRegistry) WatchService(ctx context.Context, name string, callback func([]*ServiceInfo)) error {
+	if e.client == nil {
+		return fmt.Errorf("etcd client is not initialized")
+	}
+	if callback == nil {
+		return fmt.Errorf("callback cannot be nil")
+	}
+
 	keyPrefix := fmt.Sprintf("%s/%s/services/%s/", e.opts.KeyPrefix, e.opts.Namespace, name)
 	e.logger.Infof("Watching for service changes with key prefix: %s", keyPrefix)
 
@@ -427,7 +466,11 @@ func (e *EtcdRegistry) WatchService(ctx context.Context, name string, callback f
 			case <-ctx.Done():
 				e.logger.Infof("Context for watching service [%s] is cancelled, stopping watch.", name)
 				return
-			case resp := <-watchChan:
+			case resp, ok := <-watchChan:
+				if !ok {
+					e.logger.Warnf("Watch channel for service [%s] is closed", name)
+					return
+				}
 				if resp.Canceled {
 					e.logger.Warnf("Watch for service [%s] was cancelled by etcd", name)
 					return
@@ -436,6 +479,55 @@ func (e *EtcdRegistry) WatchService(ctx context.Context, name string, callback f
 				services, err := e.GetService(ctx, name)
 				if err != nil {
 					e.logger.Errorf("Failed to get service list during watch: %v", err)
+					continue
+				}
+				callback(services)
+			}
+		}
+	}()
+
+	return nil
+}
+
+// WatchNamespace watches for all service changes in the current namespace and triggers a callback
+// with the full service instance list in that namespace.
+func (e *EtcdRegistry) WatchNamespace(ctx context.Context, callback func([]*ServiceInfo)) error {
+	if e.client == nil {
+		return fmt.Errorf("etcd client is not initialized")
+	}
+	if callback == nil {
+		return fmt.Errorf("callback cannot be nil")
+	}
+
+	keyPrefix := fmt.Sprintf("%s/%s/services/", e.opts.KeyPrefix, e.opts.Namespace)
+	e.logger.Infof("Watching for namespace service changes with key prefix: %s", keyPrefix)
+
+	initialServices, err := e.GetNamespaceServices(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get initial namespace service list: %w", err)
+	}
+	callback(initialServices)
+
+	go func() {
+		watchChan := e.client.Watch(ctx, keyPrefix, clientv3.WithPrefix())
+		for {
+			select {
+			case <-ctx.Done():
+				e.logger.Infof("Context for namespace watch is cancelled, stopping watch.")
+				return
+			case resp, ok := <-watchChan:
+				if !ok {
+					e.logger.Warnf("Namespace watch channel is closed")
+					return
+				}
+				if resp.Canceled {
+					e.logger.Warnf("Namespace watch was cancelled by etcd")
+					return
+				}
+				e.logger.Infof("Namespace [%s] services changed, re-fetching list", e.opts.Namespace)
+				services, err := e.GetNamespaceServices(ctx)
+				if err != nil {
+					e.logger.Errorf("Failed to get namespace service list during watch: %v", err)
 					continue
 				}
 				callback(services)

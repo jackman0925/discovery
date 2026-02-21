@@ -271,6 +271,101 @@ func TestIntegration_WatchService(t *testing.T) {
 	time.Sleep(1 * time.Second)
 }
 
+func TestIntegration_WatchNamespace(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode.")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	registry, _, cleanup := setupEtcd(ctx, t)
+	defer cleanup()
+
+	watchUpdates := make(chan []*ServiceInfo, 5)
+	err := registry.WatchNamespace(ctx, func(services []*ServiceInfo) {
+		watchUpdates <- services
+	})
+	assert.NoError(t, err)
+
+	select {
+	case services := <-watchUpdates:
+		assert.Empty(t, services, "Expected no services initially in namespace")
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for initial namespace watch update")
+	}
+
+	serviceA := &ServiceInfo{
+		Name:    "watch-namespace-a",
+		ID:      "watch-namespace-a-1",
+		Address: "127.0.0.1",
+		Port:    "9001",
+	}
+	err = registry.Register(ctx, serviceA)
+	assert.NoError(t, err)
+
+	select {
+	case services := <-watchUpdates:
+		assert.Len(t, services, 1, "Expected 1 service in namespace after first registration")
+		assert.Equal(t, serviceA.ID, services[0].ID)
+		assert.Equal(t, serviceA.Name, services[0].Name)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for namespace watch update after first registration")
+	}
+
+	registry2, err := NewEtcdRegistry(registry.client.Endpoints(), WithLogger(registry.logger), WithTTL(5))
+	assert.NoError(t, err)
+	defer registry2.Close()
+
+	serviceB := &ServiceInfo{
+		Name:    "watch-namespace-b",
+		ID:      "watch-namespace-b-1",
+		Address: "127.0.0.1",
+		Port:    "9002",
+	}
+	err = registry2.Register(ctx, serviceB)
+	assert.NoError(t, err)
+
+	select {
+	case services := <-watchUpdates:
+		assert.Len(t, services, 2, "Expected 2 services in namespace after second registration")
+		foundA, foundB := false, false
+		for _, s := range services {
+			if s.ID == serviceA.ID && s.Name == serviceA.Name {
+				foundA = true
+			}
+			if s.ID == serviceB.ID && s.Name == serviceB.Name {
+				foundB = true
+			}
+		}
+		assert.True(t, foundA && foundB, "Expected both namespace services to be present")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for namespace watch update after second registration")
+	}
+
+	err = registry.Deregister()
+	assert.NoError(t, err)
+
+	select {
+	case services := <-watchUpdates:
+		assert.Len(t, services, 1, "Expected 1 service in namespace after first deregistration")
+		assert.Equal(t, serviceB.ID, services[0].ID)
+		assert.Equal(t, serviceB.Name, services[0].Name)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for namespace watch update after first deregistration")
+	}
+
+	err = registry2.Deregister()
+	assert.NoError(t, err)
+
+	select {
+	case services := <-watchUpdates:
+		assert.Empty(t, services, "Expected no services in namespace after last deregistration")
+	case <-time.After(5 * time.Second):
+		t.Fatal("Timeout waiting for namespace watch update after last deregistration")
+	}
+}
+
 func TestIntegration_DeleteServices(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode.")
@@ -396,6 +491,52 @@ func TestUnit_EdgeCases(t *testing.T) {
 		_, err := registry.DeleteServiceByPrefix(context.Background(), "any-prefix")
 		assert.Error(t, err)
 		assert.Equal(t, "etcd client is not initialized", err.Error())
+	})
+
+	t.Run("GetService with uninitialized client", func(t *testing.T) {
+		_, err := registry.GetService(context.Background(), "any-service")
+		assert.Error(t, err)
+		assert.Equal(t, "etcd client is not initialized", err.Error())
+	})
+
+	t.Run("GetNamespaceServices with uninitialized client", func(t *testing.T) {
+		_, err := registry.GetNamespaceServices(context.Background())
+		assert.Error(t, err)
+		assert.Equal(t, "etcd client is not initialized", err.Error())
+	})
+
+	t.Run("WatchService with uninitialized client", func(t *testing.T) {
+		err := registry.WatchService(context.Background(), "any-service", func(_ []*ServiceInfo) {})
+		assert.Error(t, err)
+		assert.Equal(t, "etcd client is not initialized", err.Error())
+	})
+
+	t.Run("WatchNamespace with uninitialized client", func(t *testing.T) {
+		err := registry.WatchNamespace(context.Background(), func(_ []*ServiceInfo) {})
+		assert.Error(t, err)
+		assert.Equal(t, "etcd client is not initialized", err.Error())
+	})
+
+	t.Run("WatchService with nil callback", func(t *testing.T) {
+		registryWithClient := &EtcdRegistry{
+			client: &clientv3.Client{},
+			opts:   Options{TTL: 5},
+			logger: &discardLogger{},
+		}
+		err := registryWithClient.WatchService(context.Background(), "any-service", nil)
+		assert.Error(t, err)
+		assert.Equal(t, "callback cannot be nil", err.Error())
+	})
+
+	t.Run("WatchNamespace with nil callback", func(t *testing.T) {
+		registryWithClient := &EtcdRegistry{
+			client: &clientv3.Client{},
+			opts:   Options{TTL: 5},
+			logger: &discardLogger{},
+		}
+		err := registryWithClient.WatchNamespace(context.Background(), nil)
+		assert.Error(t, err)
+		assert.Equal(t, "callback cannot be nil", err.Error())
 	})
 }
 
